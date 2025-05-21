@@ -51,7 +51,7 @@ export CLOUDHSM_PIN="user2:Mylife123"
 
 ## Steps
 
-1. Generate list of CloudHSM keys for testing.
+1. Generate list of CloudHSM keys for testing. Update label for public key and private key accordingly.
 
 ```
 ./generate-cloudhsm-test-keys.sh
@@ -80,7 +80,7 @@ cat result_keys_failed.txt
 5. Clean up keys in CloudHSM after testing. Ajust the regex vlaue accordingly to delete a subset of keys.
 
 ```
-delete-cloudhsm-keys-by-regex.sh
+./delete-cloudhsm-keys-by-regex.sh
 ```
 
 ## Inside Migration Script
