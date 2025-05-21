@@ -23,6 +23,13 @@ Here are the key functionalities:
 
 - Key Cleanup: A utility script (`delete-cloudhsm-keys-by-regex.sh`) to delete keys from CloudHSM that match a specific pattern, useful for cleaning up after testing.
 
+This script also enhances the commands in original blog post with:
+
+- Use `key-reference` to replace `attributes.label` as key filter. Some commands requires a single key to be filtered. The `key-reference` value uniquely identifies each key, where as `attribute.label` may match multiple keys. This ensure reproduciblity of the test scripts.
+
+- Clarities on the key used in each command. Example, in step 4 of the blog, the key to be exported must be the respective public key of the current private key.
+
+
 ## Pre-requisites
 
 This guide only works on Windows or Linux since CloudHSM-CLI is not available in Mac.
