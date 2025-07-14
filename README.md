@@ -54,6 +54,8 @@ This guide only works on Windows or Linux since CloudHSM-CLI is not available in
 
 This project assumes that the CloudHSM cluster has been setup and activated. Crypto-user has been created. CloudHSM-CLI is installed.
 
+**New to CloudHSM?** See our [Quick Setup Guide for CloudHSM](docs/Quick%20Setup%20Guide%20for%20CloudHSM.md) which provides step-by-step instructions for setting up a CloudHSM cluster from scratch, including VPC configuration, cluster creation, HSM initialization, and crypto-user setup.
+
 1. Add CloudHSM bin folder to PATH so that we can use `cloudhsm-cli` instead of `/opt/cloudhsm/bin/cloudhsm-cli`.
 
 ```
