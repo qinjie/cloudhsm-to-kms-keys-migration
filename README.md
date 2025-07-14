@@ -1,34 +1,52 @@
 # CloudHSM to KMS Keys Migration
 
-The AWS blog post ["How to migrate asymmetric keys from CloudHSM to AWS KMS"](https://aws.amazon.com/blogs/security/how-to-migrate-asymmetric-keys-from-cloudhsm-to-aws-kms/) provides detailed, step-by-step guidance on how to securely migrate asymmetric key (such as an RSA or ECC private key) from AWS CloudHSM to AWS Key Management Service (KMS). While it provides a step-by-step method for migrating a single asymmetric key from CloudHSM to AWS KMS, it does't offer a systematic process for bulk migration of many keys.
+The AWS blog post ["How to migrate asymmetric keys from CloudHSM to AWS KMS"](https://aws.amazon.com/blogs/security/how-to-migrate-asymmetric-keys-from-cloudhsm-to-aws-kms/) provides detailed, step-by-step guidance on how to securely migrate asymmetric key (such as an RSA or ECC private key) from AWS CloudHSM to AWS Key Management Service (KMS). While it provides a step-by-step method for migrating a single asymmetric key from CloudHSM to AWS KMS, it doesn't offer a systematic process for bulk migration of many keys.
 
-This project provides a set of scripts to facilitate the bulk migration of asymmetric cryptographic keys (such as RSA and ECC keys) from AWS CloudHSM to AWS Key Management Service (KMS). It provides the list of CloudHMS to KMS key pairs in the `result_keys_succuessful.txt` file. CloudHSM keys, which failed to process, will be saved in `result_keys_failed.txt` file.
+This project provides a set of scripts to facilitate the bulk migration of asymmetric cryptographic keys (RSA and ECC keys) from AWS CloudHSM to AWS Key Management Service (KMS). The project includes separate migration scripts for EC and RSA keys, with comprehensive logging and result tracking.
 
-Here are the key functionalities:
+## Key Features
 
-- Test Key Generation: Script `generate-cloudhsm-test-keys.sh` to create test ECC key pairs in CloudHSM for testing the migration process.
+### Test Key Generation
+- `generate-cloudhsm-test-keys.sh`: Creates test ECC key pairs in CloudHSM for testing the migration process
 
-- Key Listing: Scripts `list-cloudhsm-private-keys.sh` and `list-cloudhsm-public-keys.sh` to enumerate all private and public keys stored in CloudHSM, saving detailed key information to JSON files `private_keys.json` and `public_keys.json` for processing.
+### Key Discovery and Listing
+- `list-cloudhsm-private-keys.sh`: Enumerates all private keys in CloudHSM, saving to `private_keys.json`
+- `list-cloudhsm-public-keys.sh`: Enumerates all public keys in CloudHSM, saving to `public_keys.json`
+- `count-cloudhsm-keys-by-regex.sh`: Counts keys matching a specific pattern
 
-- Bulk Key Migration: The main script (`migrate-cloudhsm-keys-to-ksm.sh`) that:
+### Bulk Key Migration
+**Separate migration scripts for different key types:**
 
-  - Reads private key information from JSON files
-  - Creates a new KMS key for each CloudHSM key being migrated
-  - Obtains wrapping parameters from AWS KMS
-  - Imports the KMS wrapping key into CloudHSM
-  - Wraps the private key inside CloudHSM using the imported wrapping key
-  - Imports the wrapped key material into AWS KMS
-  - Validates the migration by performing a sign/verify test operation
-  - Tracks successful and failed migrations in result files
+- `migrate-cloudhsm-ec-keys-to-kms.sh`: Migrates **EC (Elliptic Curve) keys**
+  - Supports secp256k1 (ECC_SECG_P256K1) and prime256v1/secp256r1 (ECC_NIST_P256) curves
+  - Uses `ec-point` attribute for key pair matching
+  - Uses ECDSA_SHA_256 signing algorithm for verification
 
-- Key Cleanup: A utility script (`delete-cloudhsm-keys-by-regex.sh`) to delete keys from CloudHSM that match a specific pattern, useful for cleaning up after testing.
+- `migrate-cloudhsm-rsa-keys-to-kms.sh`: Migrates **RSA keys**
+  - Supports RSA-2048, RSA-3072, and RSA-4096 key sizes
+  - Uses `modulus` attribute for key pair matching
+  - Uses RSASSA_PKCS1_V1_5_SHA_256 signing algorithm for verification
 
-This script also enhances the commands in original blog post with:
+**Common migration workflow:**
+- Reads private key information from JSON files
+- Creates appropriate KMS keys based on key type and specifications
+- Obtains wrapping parameters from AWS KMS
+- Imports the KMS wrapping key into CloudHSM
+- Wraps the private key inside CloudHSM using the imported wrapping key
+- Imports the wrapped key material into AWS KMS
+- Validates the migration by performing a sign/verify test operation
+- Tracks successful and failed migrations in timestamped result files
 
-- Use `key-reference` to replace `attributes.label` as key filter. Some commands requires a single key to be filtered. The `key-reference` value uniquely identifies each key, where as `attribute.label` may match multiple keys. This ensure reproduciblity of the test scripts.
+### Advanced Features
+- **Organized file management**: All intermediate files stored in `staging/` directory
+- **Comprehensive logging**: Detailed logs with timestamps for debugging and audit
+- **Clean console output**: Only key status shown on console, details in log files
+- **Graceful error handling**: Continues processing if individual keys fail
+- **Public key fallback**: Skips keys without corresponding public keys
+- **Result tracking**: CSV format results with timestamps
 
-- Clarities on the key used in each command. Example, in step 4 of the blog, the key to be exported must be the respective public key of the current private key.
-
+### Key Cleanup
+- `delete-cloudhsm-keys-by-regex.sh`: Deletes keys from CloudHSM matching a specific pattern
 
 ## Pre-requisites
 
@@ -49,38 +67,94 @@ export CLOUDHSM_ROLE=crypto-user
 export CLOUDHSM_PIN="user2:Mylife123"
 ```
 
-## Steps
+## Usage Steps
 
-1. Generate list of CloudHSM keys for testing. Update label for public key and private key accordingly.
-
-```
+### 1. Generate Test Keys (Optional)
+Generate test ECC key pairs in CloudHSM for testing the migration process:
+```bash
 ./generate-cloudhsm-test-keys.sh
 ```
 
-2. List all private keys and public keys in CloudHSM. This will save the key info in `public_keys.json` and `private_keys.json` files. For EC keys, the private key and public key share the same `ec-point` value.
-
-```
+### 2. Discover and List Keys
+List all private and public keys in CloudHSM:
+```bash
 ./list-cloudhsm-public-keys.sh
 ./list-cloudhsm-private-keys.sh
 ```
 
-3. Run the script to migrate keys from CloudHSM to KMS. This script requires the `public_keys.json` and `private_keys.json` files from previous step.
+This creates:
+- `public_keys.json`: Contains all public keys with metadata
+- `private_keys.json`: Contains all private keys with metadata
 
-```
-./migrate-cloudhsm-keys-to-ksm.sh
+**Key matching logic:**
+- **EC keys**: Private and public keys are matched using the `ec-point` attribute
+- **RSA keys**: Private and public keys are matched using the `modulus` attribute
+- Each key is uniquely identified by its `key-reference` value
+
+### 3. Run Key Migration
+Choose the appropriate migration script based on your key types:
+
+**For EC (Elliptic Curve) keys:**
+```bash
+./migrate-cloudhsm-ec-keys-to-kms.sh
 ```
 
-4. Examine the migration results in output files.
-
-```
-cat result_keys_successful.txt
-cat result_keys_failed.txt
+**For RSA keys:**
+```bash
+./migrate-cloudhsm-rsa-keys-to-kms.sh
 ```
 
-5. Clean up keys in CloudHSM after testing. Ajust the regex vlaue accordingly to delete a subset of keys.
-
+**Console output example:**
 ```
+CloudHSM Key: ec-priv-16, 0x000000000004392a ---------
+  KMS Key: arn:aws:kms:region:account:key/59a01311-ea72-4f91-bd90-cb7f6511aec0
+
+CloudHSM Key: rsa-priv-4, 0x0000000000000128 ---------
+  KMS Key: arn:aws:kms:region:account:key/1685b41b-9b99-4ce0-b4e1-6945c4feb160
+```
+
+### 4. Review Results
+Migration results are saved with timestamps:
+
+**Successful migrations:**
+```bash
+cat result_ec_keys_successful_YYYYMMDD_HHMM.txt
+cat result_rsa_keys_successful_YYYYMMDD_HHMM.txt
+```
+
+**Failed migrations:**
+```bash
+cat result_ec_keys_failed_YYYYMMDD_HHMM.txt
+cat result_rsa_keys_failed_YYYYMMDD_HHMM.txt
+```
+
+**Detailed logs:**
+```bash
+cat log_YYYYMMDD_HHMM.log
+```
+
+### 5. Clean Up Test Keys (Optional)
+Remove test keys from CloudHSM after testing:
+```bash
 ./delete-cloudhsm-keys-by-regex.sh
+```
+Adjust the regex pattern in the script to target specific keys.
+
+## File Organization
+
+After running the migration scripts, your directory will contain:
+
+```
+├── staging/                    # Intermediate files for each key
+│   ├── 0x123_WrappingPublicKey.*
+│   ├── 0x123_ImportToken.*
+│   ├── 0x123_EncryptedKeyMaterial.bin
+│   └── 0x123_public_key.pem
+├── private_keys.json           # All private keys from CloudHSM
+├── public_keys.json            # All public keys from CloudHSM
+├── result_*_successful_*.txt   # Successful migrations (CSV)
+├── result_*_failed_*.txt       # Failed migrations (CSV)
+└── log_*.log                   # Detailed execution logs
 ```
 
 ## Inside Migration Script
@@ -196,3 +270,20 @@ The script tracks the success or failure of each key migration:
 - For failed migrations, the CloudHSM key reference and label are recorded in `result_keys_failed.txt`
 
 This allows for easy tracking of which keys were successfully migrated and which ones may need attention.
+
+### Clean up
+
+After the operation, multiple wrapping key are imported into CloudHSM as public keys. In the migration script, they are set with the same prefix `kms_wrapping_key_for_*`. You may clean up these wrapping key from CloudHSM after operation.
+
+## Disclaimer
+
+This code is developed for personal interest and educational purposes only. It is **NOT intended for production use**.
+
+**Use at your own risk.** The authors and contributors:
+
+- Make no warranties or guarantees about the functionality, security, or reliability of this code
+- Are not responsible for any data loss, security breaches, or other damages that may result from its use
+- Strongly recommend thorough testing in non-production environments before any production consideration
+- Advise consulting with AWS security and cryptography experts before implementing any key migration strategies
+
+Key migration involves sensitive cryptographic operations that can permanently affect your security infrastructure. Always follow AWS best practices and your organization's security policies.
