@@ -1,19 +1,37 @@
 #!/bin/bash
 
+# Counts CloudHSM keys matching a regex pattern on their labels.
+# Paginates through all keys in CloudHSM, filters by configurable label pattern,
+# and displays count statistics grouped by key type and class.
+#
+# Usage:
+#   ./count-cloudhsm-keys-by-regex.sh [PATTERN]
+#
+# Arguments:
+#   PATTERN      - Regex pattern to match key labels (default: ".*" matches all)
+#
+# Examples:
+#   ./count-cloudhsm-keys-by-regex.sh                  # Count all keys
+#   ./count-cloudhsm-keys-by-regex.sh "test.*"        # Count keys starting with "test"
+#   ./count-cloudhsm-keys-by-regex.sh ".*-backup$"    # Count keys ending with "-backup"
+
 set -eo pipefail
 export PATH=$PATH:/opt/cloudhsm/bin
 
-# ".*" to match all labels, "^mvgx-*" to mach keys with label starting with `mvgx-`
-label_pattern=".*"   
+# Default pattern to match all labels
+default_pattern=".*"
+# Get label pattern from command line argument, use default if no argument provided
+label_pattern="${1:-$default_pattern}"   
 
-MAX_ITEMS=10
+MAX_ITEMS=50
 STARTING_TOKEN=""
 
 echo "Counting keys matching pattern: $label_pattern"
 echo "=========================================="
 
-# Initialize counters
-declare -A key_counts
+# Step 1: List all keys matching the label pattern
+echo "Step 1: Collecting all keys matching pattern '$label_pattern'..."
+all_matching_keys=""
 
 while true; do
   # Build the base command
@@ -25,21 +43,14 @@ while true; do
   # Run the command and capture output
   OUTPUT=$($CMD)
 
-  # Extract and process keys from current batch
-  echo "$OUTPUT" | jq -c '.data.matched_keys[]' | while read -r key; do
-    label=$(echo "$key" | jq -r '.attributes.label // ""')
-    
-    if [[ "$label" =~ $label_pattern ]]; then
-      key_type=$(echo "$key" | jq -r '.attributes."key-type" // "unknown"')
-      key_class=$(echo "$key" | jq -r '.attributes.class // "unknown"')
-      
-      # Create a composite key for counting
-      count_key="${key_type}_${key_class}"
-      
-      # Increment counter (use a temporary file since we're in a subshell)
-      echo "$count_key" >> /tmp/key_count_$$
-    fi
-  done
+  # Filter keys that match the pattern and append to collection
+  keys_batch=$(echo "$OUTPUT" | jq -c --arg pattern "$label_pattern" '
+    .data.matched_keys[] | select(.attributes.label // "" | test($pattern))
+  ')
+  
+  if [ -n "$keys_batch" ]; then
+    all_matching_keys="$all_matching_keys$keys_batch"$'\n'
+  fi
 
   # Get the next_token from the output
   NEXT_TOKEN=$(echo "$OUTPUT" | jq -r '.data.next_token // empty')
@@ -52,25 +63,26 @@ while true; do
   STARTING_TOKEN="$NEXT_TOKEN"
 done
 
-# Process the temporary file to get counts
-if [ -f "/tmp/key_count_$$" ]; then
+# Step 2: Count keys by type and class
+echo "Step 2: Counting keys by type and class..."
+echo
+
+if [ -n "$all_matching_keys" ]; then
+  total_matching=$(echo "$all_matching_keys" | grep -c '^{' || echo "0")
+  echo "Found $total_matching keys matching the pattern"
+  echo
+  
   echo "Key Type        | Class       | Count"
   echo "----------------|-------------|-------"
   
-  # Sort and count occurrences
-  sort /tmp/key_count_$$ | uniq -c | while read count key_info; do
-    key_type=$(echo "$key_info" | cut -d'_' -f1)
-    key_class=$(echo "$key_info" | cut -d'_' -f2)
-    printf "%-15s | %-11s | %d\n" "$key_type" "$key_class" "$count"
-  done
+  # Use jq to extract key-type and class, then count
+  echo "$all_matching_keys" | jq -r '[(.attributes."key-type" // "unknown"), (.attributes.class // "unknown")] | @tsv' | \
+    sort | uniq -c | while read count key_type key_class; do
+      printf "%-15s | %-11s | %d\n" "$key_type" "$key_class" "$count"
+    done
   
-  # Calculate and display total
-  total_count=$(wc -l < /tmp/key_count_$$)
   echo "----------------|-------------|-------"
-  printf "%-15s | %-11s | %d\n" "TOTAL" "" "$total_count"
-  
-  # Clean up
-  rm /tmp/key_count_$$
+  printf "%-15s | %-11s | %d\n" "TOTAL" "" "$total_matching"
 else
   echo "No keys found matching pattern '$label_pattern'"
 fi
