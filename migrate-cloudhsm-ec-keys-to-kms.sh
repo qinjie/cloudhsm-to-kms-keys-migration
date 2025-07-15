@@ -148,7 +148,7 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "ec")' $PRIVATE_
 
     # # Option 2: Verify using OpenSSL and PEM file from CloudHSM public key
     # # Convert raw signature to DER format for OpenSSL
-    # openssl asn1parse -genconf <(echo -e "asn1=SEQUENCE:sig\n[sig]\nr=INTEGER:0x$(head -c 32 signature.bin | xxd -p -c 32)\ns=INTEGER:0x$(tail -c 32 signature.bin | xxd -p -c 32)") -out signature.der
+    openssl asn1parse -genconf <(echo -e "asn1=SEQUENCE:sig\n[sig]\nr=INTEGER:0x$(head -c 32 signature.bin | xxd -p -c 32)\ns=INTEGER:0x$(tail -c 32 signature.bin | xxd -p -c 32)") -out signature.der
     # # Export public key to PEM
     # cloudhsm-cli key generate-file --encoding pem --path public_key_cloudhsm.pem --filter "key-reference=$PUBLIC_KEY_REF"
     # # Verify using PEM file and DER signature
