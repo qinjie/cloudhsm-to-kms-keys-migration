@@ -10,9 +10,15 @@ This project provides a set of scripts to facilitate the bulk migration of asymm
 - `generate-cloudhsm-test-keys.sh`: Creates test ECC key pairs in CloudHSM for testing the migration process
 
 ### Key Discovery and Listing
-- `list-cloudhsm-private-keys.sh`: Enumerates all private keys in CloudHSM, saving to `private_keys.json`
-- `list-cloudhsm-public-keys.sh`: Enumerates all public keys in CloudHSM, saving to `public_keys.json`
-- `count-cloudhsm-keys-by-regex.sh`: Counts keys matching a specific pattern
+- `list-cloudhsm-keys.sh`: **Unified script** for listing both private and public keys with pattern filtering
+  - Usage: `./list-cloudhsm-keys.sh [KEY_CLASS] [OUTPUT_FILE] [PATTERN]`
+  - Supports `private-key` or `public-key` classes with customizable output files and regex patterns
+- `list-cloudhsm-private-keys.sh`: **Wrapper script** for backward compatibility (calls unified script)
+  - Usage: `./list-cloudhsm-private-keys.sh [PATTERN] [OUTPUT_FILE]`
+- `list-cloudhsm-public-keys.sh`: **Wrapper script** for backward compatibility (calls unified script)
+  - Usage: `./list-cloudhsm-public-keys.sh [PATTERN] [OUTPUT_FILE]`
+- `count-cloudhsm-keys-by-regex.sh`: Counts keys matching a specific pattern with statistics by type and class
+  - Usage: `./count-cloudhsm-keys-by-regex.sh [PATTERN]`
 
 ### Bulk Key Migration
 **Separate migration scripts for different key types:**
@@ -46,7 +52,10 @@ This project provides a set of scripts to facilitate the bulk migration of asymm
 - **Result tracking**: CSV format results with timestamps
 
 ### Key Cleanup
-- `delete-cloudhsm-keys-by-regex.sh`: Deletes keys from CloudHSM matching a specific pattern
+- `delete-cloudhsm-keys-by-regex.sh`: Efficiently deletes keys from CloudHSM matching a specific pattern
+  - Uses key-reference for direct deletion (faster than label-based lookups)
+  - Usage: `./delete-cloudhsm-keys-by-regex.sh [PATTERN]`
+  - Supports regex patterns with safe default behavior
 
 ## Pre-requisites
 
@@ -78,15 +87,45 @@ Generate test ECC key pairs in CloudHSM for testing the migration process:
 ```
 
 ### 2. Discover and List Keys
-List all private and public keys in CloudHSM:
+
+**Option A: Using the unified script (recommended):**
 ```bash
-./list-cloudhsm-public-keys.sh
+# List all private keys with default output
+./list-cloudhsm-keys.sh
+
+# List all public keys to default file  
+./list-cloudhsm-keys.sh public-key
+
+# List keys with custom output file and pattern
+./list-cloudhsm-keys.sh private-key "my_private_keys.json" "^test-*"
+./list-cloudhsm-keys.sh public-key "my_public_keys.json" "^prod-*"
+```
+
+**Option B: Using individual scripts (backward compatibility):**
+```bash
+# List with default settings
 ./list-cloudhsm-private-keys.sh
+./list-cloudhsm-public-keys.sh
+
+# List with custom patterns and output files
+./list-cloudhsm-private-keys.sh "^test-*" "test_private_keys.json"
+./list-cloudhsm-public-keys.sh "^prod-*" "prod_public_keys.json"
+```
+
+**Count keys by pattern:**
+```bash
+# Count all keys
+./count-cloudhsm-keys-by-regex.sh
+
+# Count keys matching specific patterns
+./count-cloudhsm-keys-by-regex.sh "^test-*"
+./count-cloudhsm-keys-by-regex.sh ".*-backup$"
 ```
 
 This creates:
-- `public_keys.json`: Contains all public keys with metadata
-- `private_keys.json`: Contains all private keys with metadata
+- `private_keys.json`: Contains all private keys with metadata (default)
+- `public_keys.json`: Contains all public keys with metadata (default)
+- Or custom JSON files based on your specified output filenames
 
 **Key matching logic:**
 - **EC keys**: Private and public keys are matched using the `ec-point` attribute
@@ -137,10 +176,28 @@ cat log_YYYYMMDD_HHMM.log
 
 ### 5. Clean Up Test Keys (Optional)
 Remove test keys from CloudHSM after testing:
+
 ```bash
+# Delete all keys (use with caution!)
 ./delete-cloudhsm-keys-by-regex.sh
+
+# Delete keys matching specific patterns  
+./delete-cloudhsm-keys-by-regex.sh "^test-*"       # Keys starting with "test-"
+./delete-cloudhsm-keys-by-regex.sh ".*-backup$"    # Keys ending with "-backup"
+./delete-cloudhsm-keys-by-regex.sh "^mvgx-*"       # Keys starting with "mvgx-"
+
+# Delete keys for specific testing scenarios
+./delete-cloudhsm-keys-by-regex.sh "^ec-test-*"    # EC test keys
+./delete-cloudhsm-keys-by-regex.sh "^rsa-test-*"   # RSA test keys
 ```
-Adjust the regex pattern in the script to target specific keys.
+
+**⚠️ Warning**: Be very careful with deletion patterns. Always test your regex pattern with the count script first:
+```bash
+# Preview what will be deleted
+./count-cloudhsm-keys-by-regex.sh "^test-*"
+# Then delete if the count looks correct
+./delete-cloudhsm-keys-by-regex.sh "^test-*"
+```
 
 ## File Organization
 
