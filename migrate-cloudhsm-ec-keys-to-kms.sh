@@ -5,7 +5,7 @@ export PATH=$PATH:/opt/cloudhsm/bin
 
 # CloudHSM config
 PRIVATE_KEYS_FILE="private_keys.json"
-PUBLIC_KEYS_FILE="public_keys.json"
+# PUBLIC_KEYS_FILE="public_keys.json"
 
 # Create staging directory for intermediate files
 STAGING_DIR="staging"
@@ -29,28 +29,23 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "ec")' $PRIVATE_
     # KEY_LABEL: Private key attributes.label value
     KEY_LABEL=$(echo $KEY | jq -r '.attributes.label')
     # EC_POINT: Private key attribute.ec-point value, which will be used to find respective public key key-reference
-    KEY_EC_POINT=$(echo $KEY | jq -r '.attributes.["ec-point"]')
+    # KEY_EC_POINT=$(echo $KEY | jq -r '.attributes.["ec-point"]')
     # CURVE: Private key attribute.curve value, which will be used to determine KMS key spec
     KEY_CURVE=$(echo $KEY | jq -r '.attributes.curve')
-
-    # Sample values for TESTING
-    # KEY_REF=0x0000000000040da2
-    # KEY_LABEL=mvgx-priv-20
-    # KEY_EC_POINT=0x04410...
 
     echo "CloudHSM Key: $KEY_LABEL, $KEY_REF ---------"
     echo "----------------------------------------------" >> $LOG_FILE
     echo "CloudHSM Key: $KEY_LABEL, $KEY_REF, $KEY_CURVE" >> $LOG_FILE
 
-    # Step 0: Skip if corresponding public key exists
-    PUBLIC_KEY_REF=$(cat $PUBLIC_KEYS_FILE | jq -r --arg EC_POINT "$KEY_EC_POINT" '.data.matched_keys[] | select(.attributes."ec-point" == $EC_POINT) | ."key-reference"')
+    # # Step 0: Skip if corresponding public key not exists
+    # PUBLIC_KEY_REF=$(cat $PUBLIC_KEYS_FILE | jq -r --arg EC_POINT "$KEY_EC_POINT" '.data.matched_keys[] | select(.attributes."ec-point" == $EC_POINT) | ."key-reference"')
     
-    if [ "$PUBLIC_KEY_REF" = "null" ] || [ -z "$PUBLIC_KEY_REF" ]; then
-        echo "  No corresponding public key found"
-        echo "No corresponding public key found in $PUBLIC_KEYS_FILE, skipping key $KEY_REF" >> $LOG_FILE
-        echo $KEY_REF,$KEY_LABEL,"No corresponding public key found" >> $RESULT_FILE_KEYS_FAILED
-        continue
-    fi
+    # if [ "$PUBLIC_KEY_REF" = "null" ] || [ -z "$PUBLIC_KEY_REF" ]; then
+    #     echo "  No corresponding public key found"
+    #     echo "No corresponding public key found in $PUBLIC_KEYS_FILE, skipping key $KEY_REF" >> $LOG_FILE
+    #     echo $KEY_REF,$KEY_LABEL,"No corresponding public key found" >> $RESULT_FILE_KEYS_FAILED
+    #     continue
+    # fi
 
     # Step 1: Create KMS key for ECC
     # Determine key spec based on curve
@@ -132,33 +127,58 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "ec")' $PRIVATE_
     echo "Successfully imported key $KEY_LABEL to KMS key $KMS_KEY_ID" >> $LOG_FILE
 
     # Step 6: Test Keys in KMS using Public Key in CloudHSM
-    PUBLIC_KEY_PEM_FILE="$STAGING_DIR/${KEY_REF}_public_key.pem"
-    echo "Found corresponding public key with key-reference: $PUBLIC_KEY_REF" >> $LOG_FILE
-    # Generate public key PEM file from existing public key
-    cloudhsm-cli key generate-file --encoding pem --path $PUBLIC_KEY_PEM_FILE --filter "key-reference=$PUBLIC_KEY_REF" >> $LOG_FILE 2>&1
-    
-    echo "Generated public key $PUBLIC_KEY_PEM_FILE" >> $LOG_FILE
 
-    ### Sign Test Message
+    ### Sign Test Message with CloudHSM ###
     # Create a simple message and encode it in base64 in a text file
-    echo -n 'Testing My Imported Key!' | openssl base64 -out $STAGING_DIR/test_msg_base64.txt
-    # Perform the signing operation by using AWS KMS. Save the signature in file signature.sig
-    aws kms sign --key-id $KMS_KEY_ID --message fileb://$STAGING_DIR/test_msg_base64.txt --message-type RAW --signing-algorithm ECDSA_SHA_256 | jq -r '.Signature' > $STAGING_DIR/test_msg_signature.sig
-    # Decode signature from base64 to binary
-    openssl enc -d -base64 -in $STAGING_DIR/test_msg_signature.sig -out $STAGING_DIR/test_msg_signature.bin
+    echo -n 'Hello World' > message.txt
+    # cat message.txt | openssl base64 -out message_base64.txt
 
-    # Verify the signature by using the public key that you exported from CloudHSM
-    result=$(openssl dgst -sha256 -verify $PUBLIC_KEY_PEM_FILE -signature $STAGING_DIR/test_msg_signature.bin $STAGING_DIR/test_msg_base64.txt)
+    # Sign using CloudHSM private key
+    echo "Signing using CloudHSM private key..."
+    # signature.sig contains base64-encoded signature; signaturee.bin contains binary signature
+    cloudhsm-cli crypto sign ecdsa --key-filter "key-reference=$KEY_REF" --hash-function sha256 --data-path message.txt --data-type raw | jq -r '.data.signature' > signature.sig
+    # Decode the base64 signature to binary format
+    openssl enc -d -base64 -in signature.sig -out signature.bin
+
+    # # Option 1: Verify using CloudHSM public key
+    # cloudhsm-cli crypto verify ecdsa --key-filter "key-reference=$PUBLIC_KEY_REF" --hash-function sha256 --data-path message.txt --signature-path signature.bin --data-type raw > verification.txt
+    # # Check verification result
+    # result=$( [ "$(jq -r '.error_code' verification.txt)" -eq 0 ] && echo "success" || echo "failure" )
+    # echo "Verification using CloudHSM public key: $result"
+
+    # # Option 2: Verify using OpenSSL and PEM file from CloudHSM public key
+    # # Convert raw signature to DER format for OpenSSL
+    # openssl asn1parse -genconf <(echo -e "asn1=SEQUENCE:sig\n[sig]\nr=INTEGER:0x$(head -c 32 signature.bin | xxd -p -c 32)\ns=INTEGER:0x$(tail -c 32 signature.bin | xxd -p -c 32)") -out signature.der
+    # # Export public key to PEM
+    # cloudhsm-cli key generate-file --encoding pem --path public_key_cloudhsm.pem --filter "key-reference=$PUBLIC_KEY_REF"
+    # # Verify using PEM file and DER signature
+    # openssl dgst -sha256 -verify public_key_cloudhsm.pem -signature signature.der message.txt > verification.txt
+    # result=$(grep -q "Verified OK" verification.txt && echo "success" || echo "failure")
+    # echo "Verification using PEM of CloudHSM public key: $result"
+
+    # Option 3: Verify using KMS Public Key
+    aws kms verify --key-id $KMS_KEY_ID --message fileb://message.txt --message-type RAW --signing-algorithm ECDSA_SHA_256 --signature fileb://signature.der --output json > verification.txt
+
+    result=$(cat verification.txt | jq -r 'if .SignatureValid then "success" else "failure" end')
+    echo "Verification using KMS public key: $result"
+
+    # # Option 4: Verify using OpenSSL and PEM file from KMS public key
+    # aws kms get-public-key --key-id $KMS_KEY_ID --query 'PublicKey' --output text | base64 --decode > public_key.der
+    # # Convert public key from KMS in DER (binary) format to PEM (Base64-encoded), use OpenSSL
+    # openssl ec -pubin -inform DER -in public_key.der -outform PEM -out public_key.pem
+    # openssl dgst -sha256 -verify public_key.pem -signature signature.der message.txt > verification.txt
+    # result=$(grep -q "Verified OK" verification.txt && echo "success" || echo "failure")
+    # echo "Verification using PEM of KMS public key: $result"
 
     # Step 7: Save results to CSV file
-    if [ "$result" != "Verified OK" ]; then
-        echo "  Verified OK"
-        echo "FAILED to process CloudHSM key $KEY_REF, $KEY_LABEL" >> $LOG_FILE
+    if [ "$result" != "success" ]; then
+        echo "FAILED to process CloudHSM key $KEY_REF, $KEY_LABEL" | tee -a $LOG_FILE
         echo $KEY_REF,$KEY_LABEL,"Verification failed: $result" >> $RESULT_FILE_KEYS_FAILED
     else
-        echo "SUCCEED to process CloudHSM key $KEY_REF, $KEY_LABEL" >> $LOG_FILE
+        echo "SUCCEED to process CloudHSM key $KEY_REF, $KEY_LABEL" | tee -a $LOG_FILE
         echo $KEY_REF,$KEY_LABEL,$KMS_KEY_ID >> $RESULT_FILE_KEYS_SUCCESSFUL
     fi
+
 done
 
-echo "All keys are processed" | tee -a $LOG_FILE
+echo "------ All keys are processed --------" | tee -a $LOG_FILE
