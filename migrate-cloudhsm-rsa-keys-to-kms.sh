@@ -5,7 +5,7 @@ export PATH=$PATH:/opt/cloudhsm/bin
 
 # CloudHSM config
 PRIVATE_KEYS_FILE="private_keys.json"
-PUBLIC_KEYS_FILE="public_keys.json"
+# PUBLIC_KEYS_FILE="public_keys.json"
 
 # Create staging directory for intermediate files
 STAGING_DIR="staging"
@@ -42,15 +42,15 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "rsa")' $PRIVATE
     echo "----------------------------------------------" >> $LOG_FILE
     echo "CloudHSM Key: $KEY_LABEL, $KEY_REF, RSA-$KEY_MODULUS_SIZE" >> $LOG_FILE
 
-    # Step 0: Skip if corresponding public key exists
-    PUBLIC_KEY_REF=$(cat $PUBLIC_KEYS_FILE | jq -r --arg MODULUS "$KEY_MODULUS" '.data.matched_keys[] | select(.attributes.modulus == $MODULUS) | ."key-reference"')
+    # # Step 0: Skip if corresponding public key exists
+    # PUBLIC_KEY_REF=$(cat $PUBLIC_KEYS_FILE | jq -r --arg MODULUS "$KEY_MODULUS" '.data.matched_keys[] | select(.attributes.modulus == $MODULUS) | ."key-reference"')
     
-    if [ "$PUBLIC_KEY_REF" = "null" ] || [ -z "$PUBLIC_KEY_REF" ]; then
-        echo "  No corresponding public key found"
-        echo "No corresponding public key found in $PUBLIC_KEYS_FILE, skipping key $KEY_REF" >> $LOG_FILE
-        echo $KEY_REF,$KEY_LABEL,"No corresponding public key found" >> $RESULT_FILE_KEYS_FAILED
-        continue
-    fi
+    # if [ "$PUBLIC_KEY_REF" = "null" ] || [ -z "$PUBLIC_KEY_REF" ]; then
+    #     echo "  No corresponding public key found"
+    #     echo "No corresponding public key found in $PUBLIC_KEYS_FILE, skipping key $KEY_REF" >> $LOG_FILE
+    #     echo $KEY_REF,$KEY_LABEL,"No corresponding public key found" >> $RESULT_FILE_KEYS_FAILED
+    #     continue
+    # fi
 
     # Step 1: Create KMS key for RSA
     # Determine key spec based on modulus size
@@ -133,6 +133,23 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "rsa")' $PRIVATE
         --expiration-model KEY_MATERIAL_DOES_NOT_EXPIRE >> $LOG_FILE 2>&1
 
     echo "Successfully imported key $KEY_LABEL to KMS key $KMS_KEY_ID" >> $LOG_FILE
+
+    # Wait for key to become enabled
+    echo "Waiting for key to become enabled..."
+    while true; do
+        KEY_STATE=$(aws kms describe-key --key-id $KMS_KEY_ID --query 'KeyMetadata.KeyState' --output text)
+        echo "Key state: $KEY_STATE"
+        if [ "$KEY_STATE" = "Enabled" ]; then
+            break
+        elif [ "$KEY_STATE" = "PendingImport" ]; then
+            sleep 2
+        else
+            echo "Unexpected key state: $KEY_STATE"
+            echo $KEY_REF,$KEY_LABEL,"Key import failed - 
+    state: $KEY_STATE" >> $RESULT_FILE_KEYS_FAILED
+            continue 2  # Skip to next key
+        fi
+    done
 
     # Step 6: Test Keys in KMS using Public Key in CloudHSM
 

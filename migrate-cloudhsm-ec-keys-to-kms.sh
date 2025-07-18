@@ -126,6 +126,23 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "ec")' $PRIVATE_
 
     echo "Successfully imported key $KEY_LABEL to KMS key $KMS_KEY_ID" >> $LOG_FILE
 
+    # Wait for key to become enabled
+    echo "Waiting for key to become enabled..."
+    while true; do
+        KEY_STATE=$(aws kms describe-key --key-id $KMS_KEY_ID --query 'KeyMetadata.KeyState' --output text)
+        echo "Key state: $KEY_STATE"
+        if [ "$KEY_STATE" = "Enabled" ]; then
+            break
+        elif [ "$KEY_STATE" = "PendingImport" ]; then
+            sleep 2
+        else
+            echo "Unexpected key state: $KEY_STATE"
+            echo $KEY_REF,$KEY_LABEL,"Key import failed - 
+    state: $KEY_STATE" >> $RESULT_FILE_KEYS_FAILED
+            continue 2  # Skip to next key
+        fi
+    done
+
     # Step 6: Test Keys in KMS using Public Key in CloudHSM
 
     ### Sign Test Message with CloudHSM ###
