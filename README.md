@@ -4,6 +4,9 @@ The AWS blog post ["How to migrate asymmetric keys from CloudHSM to AWS KMS"](ht
 
 This project provides a set of scripts to facilitate the bulk migration of asymmetric cryptographic keys (RSA and ECC keys) from AWS CloudHSM to AWS Key Management Service (KMS). The project includes separate migration scripts for EC and RSA keys, with comprehensive logging and result tracking.
 
+Requirement: 
+- CloudHSM CLI > 5.16.1
+
 ## Key Features
 
 ### Test Key Generation
