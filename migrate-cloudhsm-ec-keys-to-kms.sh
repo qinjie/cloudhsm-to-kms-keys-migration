@@ -143,6 +143,8 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "ec")' $PRIVATE_
         fi
     done
 
+    sleep 1
+    
     # Step 6: Test Keys in KMS using Public Key in CloudHSM
 
     ### Sign Test Message with CloudHSM ###
