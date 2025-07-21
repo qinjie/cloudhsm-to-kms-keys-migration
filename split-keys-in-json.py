@@ -123,7 +123,7 @@ def main():
     # Example usage
     input_file = "private_keys.json"
     output_directory = "split_keys_output"
-    max_keys = 50
+    max_keys = 30
 
     print(f"Splitting JSON file: {input_file}")
     print(f"Max keys per file: {max_keys}")
