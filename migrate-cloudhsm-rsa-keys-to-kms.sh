@@ -4,22 +4,25 @@ set -eo pipefail
 export PATH=$PATH:/opt/cloudhsm/bin
 
 # CloudHSM config
-PRIVATE_KEYS_FILE="private_keys.json"
-# PUBLIC_KEYS_FILE="public_keys.json"
+PRIVATE_KEYS_FILE="${1:-private_keys.json}"
+# PUBLIC_KEYS_FILE="${2:-public_keys.json}"
 
 # Create staging directory for intermediate files
 STAGING_DIR="staging"
 mkdir -p $STAGING_DIR
 
 TIMESTAMP="$(date '+%Y%m%d_%H%M')"
-RESULT_FILE_KEYS_FAILED="result_rsa_keys_failed_$TIMESTAMP.txt"
-RESULT_FILE_KEYS_SUCCESSFUL="result_rsa_keys_successful_$TIMESTAMP.txt"
+FILENAME="${PRIVATE_KEYS_FILE##*/}"      # Gets just the filename
+FILENAME_NO_EXT="${FILENAME%.*}"         # Removes the extension
+RESULT_FILE_KEYS_FAILED="result_failed_${FILENAME_NO_EXT%.*}_$TIMESTAMP.txt"
+RESULT_FILE_KEYS_SUCCESS="result_success_${FILENAME_NO_EXT%.*}_$TIMESTAMP.txt"
+
 # Create log file with timestamp
 LOG_FILE="log_$TIMESTAMP.log"
 
 # Setup result files
-echo "CloudHSM_KEY_REF,CLOUDHSM_KEY_LABEL,REASON" > $RESULT_FILE_KEYS_FAILED
-echo "CloudHSM_KEY_REF,CLOUDHSM_KEY_LABEL,KMS_KEY_ID" > $RESULT_FILE_KEYS_SUCCESSFUL
+# echo "CloudHSM_KEY_REF,CLOUDHSM_KEY_LABEL,REASON" > $RESULT_FILE_KEYS_FAILED
+# echo "CloudHSM_KEY_REF,CLOUDHSM_KEY_LABEL,KMS_KEY_ID" > $RESULT_FILE_KEYS_SUCCESS
 
 # Process each RSA private key only
 jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "rsa")' $PRIVATE_KEYS_FILE | while read -r KEY; do
@@ -151,8 +154,6 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "rsa")' $PRIVATE
         fi
     done
 
-    sleep 1
-
     # Step 6: Test Keys in KMS using Public Key in CloudHSM
 
     ### Sign Test Message with CloudHSM ###
@@ -181,11 +182,32 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "rsa")' $PRIVATE
     # result=$(grep -q "Verified OK" verification.txt && echo "success" || echo "failure")
     # echo "Verification using PEM of CloudHSM public key: $result"
 
-    # Option 3: Verify using KMS Public Key
-    aws kms verify --key-id $KMS_KEY_ID --message fileb://message.txt --message-type RAW --signing-algorithm RSASSA_PKCS1_V1_5_SHA_256 --signature fileb://signature.bin --output json > verification.txt
-
-    result=$(cat verification.txt | jq -r 'if .SignatureValid then "success" else "failure" end')
-    echo "Verification using KMS public key: $result"
+    # Option 3: Verify using KMS Public Key with retry logic
+    result="failure"
+    max_attempts=5
+    for attempt in $(seq 1 $max_attempts); do
+        echo "Verification attempt $attempt/$max_attempts using KMS public key..."
+        
+        if aws kms verify --key-id $KMS_KEY_ID --message fileb://message.txt --message-type RAW --signing-algorithm RSASSA_PKCS1_V1_5_SHA_256 --signature fileb://signature.bin --output json > verification.txt 2>&1; then
+            result=$(cat verification.txt | jq -r 'if .SignatureValid then "success" else "failure" end')
+            echo "Verification using KMS public key: $result"
+            break
+        else
+            if grep -qi "pending import\|invalid.*state" verification.txt; then
+                echo "Key still not ready for operations, waiting and retrying..."
+                sleep $((attempt * 3))  # Exponential backoff: 3, 6, 9, 12, 15 seconds
+            else
+                echo "Verification failed with error:"
+                cat verification.txt
+                break
+            fi
+        fi
+        
+        if [ $attempt -eq $max_attempts ]; then
+            echo "Max retry attempts reached, verification failed"
+            result="failure"
+        fi
+    done
 
     # # Option 4: Verify using OpenSSL and PEM file from KMS public key
     # aws kms get-public-key --key-id $KMS_KEY_ID --query 'PublicKey' --output text | base64 --decode > public_key.der 2>/dev/null
@@ -203,8 +225,22 @@ jq -c '.data.matched_keys[] | select(.attributes["key-type"] == "rsa")' $PRIVATE
         echo $KEY_REF,$KEY_LABEL,"Verification failed: $result" >> $RESULT_FILE_KEYS_FAILED
     else
         echo "SUCCEED to process CloudHSM key $KEY_REF, $KEY_LABEL" | tee -a $LOG_FILE
-        echo $KEY_REF,$KEY_LABEL,$KMS_KEY_ID >> $RESULT_FILE_KEYS_SUCCESSFUL
+        echo $KEY_REF,$KEY_LABEL,$KMS_KEY_ID >> $RESULT_FILE_KEYS_SUCCESS
     fi
 done
 
-echo "------ All keys are processed --------" | tee -a $LOG_FILE
+# Count results
+SUCCESSFUL_COUNT=0
+FAILED_COUNT=0
+
+if [ -f "$RESULT_FILE_KEYS_SUCCESS" ]; then
+    SUCCESSFUL_COUNT=$(wc -l < "$RESULT_FILE_KEYS_SUCCESS" | tr -d ' ')
+fi
+
+if [ -f "$RESULT_FILE_KEYS_FAILED" ]; then
+    FAILED_COUNT=$(wc -l < "$RESULT_FILE_KEYS_FAILED" | tr -d ' ')
+fi
+
+echo "------ Migration Complete: $SUCCESSFUL_COUNT successful, $FAILED_COUNT failed --------" | tee -a $LOG_FILE
+
+

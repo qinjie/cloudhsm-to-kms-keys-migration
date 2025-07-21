@@ -4,15 +4,14 @@ The AWS blog post ["How to migrate asymmetric keys from CloudHSM to AWS KMS"](ht
 
 This project provides a set of scripts to facilitate the bulk migration of asymmetric cryptographic keys (RSA and ECC keys) from AWS CloudHSM to AWS Key Management Service (KMS). The project includes separate migration scripts for EC and RSA keys, with comprehensive logging and result tracking.
 
-Requirement: 
-- CloudHSM CLI > 5.16.1
-
 ## Key Features
 
 ### Test Key Generation
+
 - `generate-cloudhsm-test-keys.sh`: Creates test ECC key pairs in CloudHSM for testing the migration process
 
 ### Key Discovery and Listing
+
 - `list-cloudhsm-keys.sh`: **Unified script** for listing both private and public keys with pattern filtering
   - Usage: `./list-cloudhsm-keys.sh [KEY_CLASS] [OUTPUT_FILE] [PATTERN]`
   - Supports `private-key` or `public-key` classes with customizable output files and regex patterns
@@ -23,10 +22,22 @@ Requirement:
 - `count-cloudhsm-keys-by-regex.sh`: Counts keys matching a specific pattern with statistics by type and class
   - Usage: `./count-cloudhsm-keys-by-regex.sh [PATTERN]`
 
+### Batch Processing Tools
+
+- `count-key-types-from-json.py`: Analyzes key types and counts in JSON files for migration planning
+  - Usage: `python3 count-key-types-from-json.py private_keys.json`
+  - Provides summary statistics by key type (EC, RSA, etc.)
+- `split-keys-in-json.py`: Splits large key JSON files into manageable batches for safer migration
+  - Usage: Run script to split `private_keys.json` into batches of 50 keys per file in `split_keys_output/` directory
+  - Organizes keys by type (EC, RSA) and creates numbered batch files
+  - Reduces risk of migration failures and enables parallel processing
+
 ### Bulk Key Migration
+
 **Separate migration scripts for different key types:**
 
 - `migrate-cloudhsm-ec-keys-to-kms.sh`: Migrates **EC (Elliptic Curve) keys**
+
   - Supports secp256k1 (ECC_SECG_P256K1) and prime256v1/secp256r1 (ECC_NIST_P256) curves
   - Uses `ec-point` attribute for key pair matching
   - Uses ECDSA_SHA_256 signing algorithm for verification
@@ -37,6 +48,7 @@ Requirement:
   - Uses RSASSA_PKCS1_V1_5_SHA_256 signing algorithm for verification
 
 **Common migration workflow:**
+
 - Reads private key information from JSON files
 - Creates appropriate KMS keys based on key type and specifications
 - Obtains wrapping parameters from AWS KMS
@@ -47,6 +59,7 @@ Requirement:
 - Tracks successful and failed migrations in timestamped result files
 
 ### Advanced Features
+
 - **Organized file management**: All intermediate files stored in `staging/` directory
 - **Comprehensive logging**: Detailed logs with timestamps for debugging and audit
 - **Clean console output**: Only key status shown on console, details in log files
@@ -55,6 +68,7 @@ Requirement:
 - **Result tracking**: CSV format results with timestamps
 
 ### Key Cleanup
+
 - `delete-cloudhsm-keys-by-regex.sh`: Efficiently deletes keys from CloudHSM matching a specific pattern
   - Uses key-reference for direct deletion (faster than label-based lookups)
   - Usage: `./delete-cloudhsm-keys-by-regex.sh [PATTERN]`
@@ -84,7 +98,9 @@ export CLOUDHSM_PIN="user2:Mylife123"
 ## Usage Steps
 
 ### 1. Generate Test Keys (Optional)
+
 Generate test ECC key pairs in CloudHSM for testing the migration process:
+
 ```bash
 ./generate-cloudhsm-test-keys.sh
 ```
@@ -92,11 +108,12 @@ Generate test ECC key pairs in CloudHSM for testing the migration process:
 ### 2. Discover and List Keys
 
 **Option A: Using the unified script (recommended):**
+
 ```bash
 # List all private keys with default output
 ./list-cloudhsm-keys.sh
 
-# List all public keys to default file  
+# List all public keys to default file
 ./list-cloudhsm-keys.sh public-key
 
 # List keys with custom output file and pattern
@@ -105,6 +122,7 @@ Generate test ECC key pairs in CloudHSM for testing the migration process:
 ```
 
 **Option B: Using individual scripts (backward compatibility):**
+
 ```bash
 # List with default settings
 ./list-cloudhsm-private-keys.sh
@@ -116,6 +134,7 @@ Generate test ECC key pairs in CloudHSM for testing the migration process:
 ```
 
 **Count keys by pattern:**
+
 ```bash
 # Count all keys
 ./count-cloudhsm-keys-by-regex.sh
@@ -126,29 +145,85 @@ Generate test ECC key pairs in CloudHSM for testing the migration process:
 ```
 
 This creates:
+
 - `private_keys.json`: Contains all private keys with metadata (default)
 - `public_keys.json`: Contains all public keys with metadata (default)
 - Or custom JSON files based on your specified output filenames
 
 **Key matching logic:**
+
 - **EC keys**: Private and public keys are matched using the `ec-point` attribute
 - **RSA keys**: Private and public keys are matched using the `modulus` attribute
 - Each key is uniquely identified by its `key-reference` value
 
-### 3. Run Key Migration
-Choose the appropriate migration script based on your key types:
+### 3. Analyze and Prepare for Batch Migration (Recommended for Large Datasets)
 
-**For EC (Elliptic Curve) keys:**
+**⚠️ Important**: For large numbers of keys, batch processing is strongly recommended to reduce risk and enable better progress tracking.
+
+**Step 3a: Analyze Key Distribution**
+
 ```bash
-./migrate-cloudhsm-ec-keys-to-kms.sh
+# Get an overview of key types and counts
+python3 count-key-types-from-json.py private_keys.json
 ```
 
-**For RSA keys:**
-```bash
-./migrate-cloudhsm-rsa-keys-to-kms.sh
+Example output:
+
 ```
+Key Type Counts:
+--------------------
+ec: 150
+rsa: 75
+--------------------
+Total: 225
+```
+
+**Step 3b: Split Keys into Manageable Batches**
+
+```bash
+# Split keys into batches of 50 keys per file
+python3 split-keys-in-json.py
+```
+
+This creates a `split_keys_output/` directory with organized batch files:
+
+```
+split_keys_output/
+├── ec_keys_part_001.json      # EC keys batch 1 (50 keys)
+├── ec_keys_part_002.json      # EC keys batch 2 (50 keys)
+├── ec_keys_part_003.json      # EC keys batch 3 (50 keys)
+├── rsa_keys_part_001.json     # RSA keys batch 1 (50 keys)
+└── rsa_keys_part_002.json     # RSA keys batch 2 (25 keys)
+```
+
+**Benefits of batch processing:**
+
+- **Reduced risk**: If migration fails, only one batch is affected
+- **Progress tracking**: Clear visibility of completed vs remaining batches
+- **Parallel processing**: Can run multiple batches simultaneously if needed
+- **Resource management**: Prevents overwhelming CloudHSM or KMS with large operations
+
+### 4. Run Key Migration
+
+```bash
+# Migrate EC key batches one by one
+./migrate-cloudhsm-ec-keys-to-kms.sh split_keys_output/ec_keys_part_001.json
+./migrate-cloudhsm-ec-keys-to-kms.sh split_keys_output/ec_keys_part_002.json
+
+# Migrate RSA key batches one by one
+./migrate-cloudhsm-rsa-keys-to-kms.sh split_keys_output/rsa_keys_part_001.json
+./migrate-cloudhsm-rsa-keys-to-kms.sh split_keys_output/rsa_keys_part_002.json
+```
+
+**Batch Migration Best Practices:**
+
+- Process one batch at a time to monitor progress and handle any issues
+- Check result files after each batch to ensure successful migration
+- Keep track of completed batches to avoid reprocessing
+- Monitor CloudHSM and KMS service limits and throttling
 
 **Console output example:**
+
 ```
 CloudHSM Key: ec-priv-16, 0x000000000004392a ---------
   KMS Key: arn:aws:kms:region:account:key/59a01311-ea72-4f91-bd90-cb7f6511aec0
@@ -157,34 +232,40 @@ CloudHSM Key: rsa-priv-4, 0x0000000000000128 ---------
   KMS Key: arn:aws:kms:region:account:key/1685b41b-9b99-4ce0-b4e1-6945c4feb160
 ```
 
-### 4. Review Results
-Migration results are saved with timestamps:
+### 5. Review Results
 
-**Successful migrations:**
+Migration results are saved with timestamps for each batch:
+
 ```bash
-cat result_ec_keys_successful_YYYYMMDD_HHMM.txt
-cat result_rsa_keys_successful_YYYYMMDD_HHMM.txt
+# Each batch creates its own result files
+cat result_success_ec_keys_part_001_YYYYMMDD_HHMM.txt
+cat result_success_ec_keys_part_002_YYYYMMDD_HHMM.txt
+cat result_failed_ec_keys_part_001_YYYYMMDD_HHMM.txt
+
+# Combine all successful migrations across batches
+cat result_success_*_YYYYMMDD_HHMM.txt > all_successful_migrations.txt
+
+# Count total successes and failures
+wc -l result_success_*.txt
+wc -l result_failed_*.txt
 ```
 
-**Failed migrations:**
-```bash
-cat result_ec_keys_failed_YYYYMMDD_HHMM.txt
-cat result_rsa_keys_failed_YYYYMMDD_HHMM.txt
-```
+**Migration completion summary:**
+Each migration script now shows completion statistics:
 
-**Detailed logs:**
-```bash
-cat log_YYYYMMDD_HHMM.log
+```
+------ Migration Complete: 45 successful, 5 failed --------
 ```
 
 ### 5. Clean Up Test Keys (Optional)
+
 Remove test keys from CloudHSM after testing:
 
 ```bash
 # Delete all keys (use with caution!)
 ./delete-cloudhsm-keys-by-regex.sh
 
-# Delete keys matching specific patterns  
+# Delete keys matching specific patterns
 ./delete-cloudhsm-keys-by-regex.sh "^test-*"       # Keys starting with "test-"
 ./delete-cloudhsm-keys-by-regex.sh ".*-backup$"    # Keys ending with "-backup"
 ./delete-cloudhsm-keys-by-regex.sh "^mvgx-*"       # Keys starting with "mvgx-"
@@ -195,6 +276,7 @@ Remove test keys from CloudHSM after testing:
 ```
 
 **⚠️ Warning**: Be very careful with deletion patterns. Always test your regex pattern with the count script first:
+
 ```bash
 # Preview what will be deleted
 ./count-cloudhsm-keys-by-regex.sh "^test-*"
@@ -207,17 +289,30 @@ Remove test keys from CloudHSM after testing:
 After running the migration scripts, your directory will contain:
 
 ```
-├── staging/                    # Intermediate files for each key
+├── staging/                           # Intermediate files for each key
 │   ├── 0x123_WrappingPublicKey.*
 │   ├── 0x123_ImportToken.*
 │   ├── 0x123_EncryptedKeyMaterial.bin
 │   └── 0x123_public_key.pem
-├── private_keys.json           # All private keys from CloudHSM
-├── public_keys.json            # All public keys from CloudHSM
-├── result_*_successful_*.txt   # Successful migrations (CSV)
-├── result_*_failed_*.txt       # Failed migrations (CSV)
-└── log_*.log                   # Detailed execution logs
+├── split_keys_output/                 # Batch processing output (if used)
+│   ├── ec_keys_part_001.json         # EC keys batch 1
+│   ├── ec_keys_part_002.json         # EC keys batch 2
+│   ├── rsa_keys_part_001.json        # RSA keys batch 1
+│   └── rsa_keys_part_002.json        # RSA keys batch 2
+├── private_keys.json                  # All private keys from CloudHSM
+├── public_keys.json                   # All public keys from CloudHSM
+├── result_success_*_YYYYMMDD_HHMM.txt # Successful migrations (CSV)
+├── result_failed_*_YYYYMMDD_HHMM.txt  # Failed migrations (CSV)
+├── log_YYYYMMDD_HHMM.log             # Detailed execution logs
+├── count-key-types-from-json.py       # Key analysis utility
+└── split-keys-in-json.py              # Batch splitting utility
 ```
+
+**For batch migrations, results are organized by batch:**
+
+- Each batch creates separate result and log files with timestamps
+- File naming includes the source JSON filename for easy tracking
+- Use `cat result_success_*.txt` to combine results across all batches
 
 ## Inside Migration Script
 
@@ -328,8 +423,8 @@ openssl dgst -sha256 -verify $PUBLIC_KEY_PEM_FILE -signature test_msg_signature.
 
 The script tracks the success or failure of each key migration:
 
-- For successful migrations, the CloudHSM key reference, label, and corresponding KMS key ID are recorded in `result_keys_successful.txt`
-- For failed migrations, the CloudHSM key reference and label are recorded in `result_keys_failed.txt`
+- For successful migrations, the CloudHSM key reference, label, and corresponding KMS key ID are recorded in `result_success_<input_filename>_<timestamp>.txt`
+- For failed migrations, the CloudHSM key reference and label are recorded in `result_failed_<input_filename>_<timestamp>.txt`
 
 This allows for easy tracking of which keys were successfully migrated and which ones may need attention.
 
